@@ -1,13 +1,13 @@
 import React, { useState, useRef, useEffect } from 'react';
 import hero from '../../assets/hero.png';
-import { useNavigate, Link } from 'react-router-dom';
+import { useNavigate } from 'react-router-dom';
 import axios from 'axios';
 import { MapPin, ChevronLeft, ChevronRight, ExternalLink, Info } from 'lucide-react';
 
 // Definisikan base URL API di satu tempat agar mudah diubah
 const API_BASE_URL = 'https://recommendation-beach-backend-production.up.railway.app';
 
-const tagOptions = ['Tenang', 'Penuh', 'Bersih', 'Perahu Pisang', 'Berenang Selancar', 'Snorkeling'];
+const tagOptions = ['Tenang', 'Penuh', 'Bersih', 'Banana boat', 'Surfing', 'Snorkeling'];
 
 const Homepage = () => {
   const [inputValue, setInputValue] = useState('');
@@ -20,12 +20,12 @@ const Homepage = () => {
   const [currentIndex, setCurrentIndex] = useState(0);
   const scrollContainerRef = useRef(null);
   const navigate = useNavigate();
-  const inputRef = useRef();
-  const dropdownRef = useRef();
+  const inputRef = useRef(null);
+  const dropdownRef = useRef(null);
 
   const getAuthToken = () => localStorage.getItem('token');
 
-  // --- REFAKTORISASI: Logika pengambilan data rekomendasi ---
+  // --- Logika pengambilan data rekomendasi ---
   const fetchRecommendations = async (preference = "pantai yang indah, sepi, dan bersih") => {
     setIsLoadingRecommend(true);
     const token = getAuthToken();
@@ -37,36 +37,18 @@ const Homepage = () => {
     }
 
     try {
-      // 1. Dapatkan daftar ID dan skor rekomendasi
+      // 1. Dapatkan daftar ID dan skor rekomendasi (sudah terurut dari backend)
       const recommendResponse = await axios.post(`${API_BASE_URL}/beach/recommend`, {
         preference_text: preference,
-        top_n: 8
       }, {
         headers: { Authorization: `Bearer ${token}` }
       });
       
-      const recommendationsWithScores = recommendResponse.data.recommendations;
+      const recommendationsFromBE = recommendResponse.data.recommendations;
 
-      if (recommendationsWithScores && recommendationsWithScores.length > 0) {
-        const placeIds = recommendationsWithScores.map(rec => rec.placeId);
-        
-        // Buat map untuk menggabungkan skor nanti
-        const scoreMap = new Map(recommendationsWithScores.map(rec => [rec.placeId, rec.score]));
-
-        // 2. Dapatkan detail lengkap untuk semua ID dalam satu panggilan API
-        const detailsResponse = await axios.post(`${API_BASE_URL}/beach/batch-details`, {
-          placeIds: placeIds
-        });
-        
-        const detailedBeaches = detailsResponse.data;
-
-        // 3. Gabungkan detail dengan skor
-        const finalRecommendations = detailedBeaches.map(beach => ({
-          ...beach,
-          score: scoreMap.get(beach.placeId) || 0 // Tambahkan skor kembali
-        }));
-
-        setRecommendations(finalRecommendations);
+      // Cek jika backend mengembalikan data yang valid
+      if (recommendationsFromBE && recommendationsFromBE.length > 0) {
+        setRecommendations(recommendationsFromBE.slice(0, 8)); // Ambil 8 teratas seperti sebelumnya
       } else {
         setRecommendations([]);
       }
@@ -83,7 +65,7 @@ const Homepage = () => {
     }
   };
   
-  // --- REFAKTORISASI: Logika pencarian dan rekomendasi dari input user ---
+  // --- Logika pencarian dan rekomendasi dari input user ---
   const handleSearch = async () => {
     const trimmed = inputValue.trim();
     if (!trimmed) return;
@@ -93,7 +75,7 @@ const Homepage = () => {
 
     try {
       if (searchMode === 'search') {
-        // --- DIPERBAIKI: Menggunakan metode GET untuk pencarian ---
+        // Metode GET untuk pencarian
         const response = await axios.get(`${API_BASE_URL}/beach/search`, {
           params: {
             search: trimmed,
@@ -101,9 +83,7 @@ const Homepage = () => {
             page: 1,
           },
         });
-
-        // CATATAN: Pengiriman 'state' ini tidak persisten. Halaman /search idealnya
-        // harus bisa fetch data sendiri berdasarkan URL query jika state tidak ada.
+        
         navigate(`/search?search=${encodeURIComponent(trimmed)}`, {
           state: {
             results: response.data.data,
@@ -118,43 +98,20 @@ const Homepage = () => {
           return;
         }
 
-        // 1. Dapatkan daftar ID rekomendasi berdasarkan preferensi
+        // Dapatkan rekomendasi yang sudah lengkap dari backend
         const recommendResponse = await axios.post(`${API_BASE_URL}/beach/recommend`, {
           preference_text: trimmed,
-          top_n: 10
         }, { headers: { Authorization: `Bearer ${token}` } });
         
-        const recommendationsWithScores = recommendResponse.data.recommendations;
+        const finalResults = recommendResponse.data.recommendations;
 
-        if (recommendationsWithScores && recommendationsWithScores.length > 0) {
-          const placeIds = recommendationsWithScores.map(rec => rec.placeId);
-          const scoreMap = new Map(recommendationsWithScores.map(rec => [rec.placeId, rec.score]));
-
-          // 2. Dapatkan detail lengkap dalam satu panggilan
-          const detailsResponse = await axios.post(`${API_BASE_URL}/beach/batch-details`, {
-            placeIds: placeIds
-          });
-
-          const detailedBeaches = detailsResponse.data;
-
-          // 3. Gabungkan detail dan skor
-          const finalResults = detailedBeaches.map(beach => ({
-            ...beach,
-            score: scoreMap.get(beach.placeId) || 0
-          }));
-          
-          navigate(`/search?search=${encodeURIComponent(trimmed)}`, {
-            state: {
-              results: finalResults,
-              totalCount: finalResults.length,
-              searchMode: 'recommend',
-            },
-          });
-        } else {
-          navigate(`/search?search=${encodeURIComponent(trimmed)}`, {
-            state: { results: [], totalCount: 0, searchMode: 'recommend' },
-          });
-        }
+        navigate(`/search?search=${encodeURIComponent(trimmed)}`, {
+          state: {
+            results: finalResults || [],
+            totalCount: finalResults?.length || 0,
+            searchMode: 'recommend',
+          },
+        });
       }
     } catch (error) {
       console.error('Error during search/recommendation:', error);
@@ -238,7 +195,6 @@ const Homepage = () => {
                 totalCount: response.data.totalCount,
                 currentPage: response.data.currentPage,
                 totalPages: response.data.totalPages,
-                hasMore: response.data.totalCount > (response.data.currentPage * response.data.limit),
               },
             });
           } catch (error) {
@@ -517,14 +473,14 @@ const Homepage = () => {
                 <div className="flex gap-6 pb-4">
                   {recommendations.map((beach, idx) => (
                     <div
-                      key={beach.place_id || beach.placeId}
+                      key={beach.placeId}
                       className="flex-shrink-0 w-64 bg-white rounded-2xl shadow-lg overflow-hidden flex flex-col group transition-all duration-300"
                       style={{ minWidth: '256px' }}
                     >
                       <div className="relative h-48">
                         <img
                           src={beach.featured_image || 'https://images.unsplash.com/photo-1507525428034-b723cf961d3e?w=400'}
-                          alt={beach.name || beach.place_name}
+                          alt={beach.place_name}
                           className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
                           loading="lazy"
                           onError={(e) => {
@@ -536,7 +492,7 @@ const Homepage = () => {
                       </div>
                       <div className="p-4 flex flex-col flex-grow space-y-2">
                         <h3 className="font-bold text-lg text-gray-800 truncate">
-                          {beach.name || beach.place_name}
+                          {beach.place_name}
                         </h3>
                         <div className="flex items-center gap-2">
                           <div className="flex">
