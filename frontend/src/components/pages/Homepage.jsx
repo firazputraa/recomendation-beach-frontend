@@ -3,7 +3,9 @@ import hero from '../../assets/hero.png';
 import { useNavigate, Link } from 'react-router-dom';
 import axios from 'axios';
 import { MapPin, ChevronLeft, ChevronRight, ExternalLink, Info } from 'lucide-react';
-import beachpng from "../../assets/beach.png";
+
+// Definisikan base URL API di satu tempat agar mudah diubah
+const API_BASE_URL = 'https://recommendation-beach-backend-production.up.railway.app';
 
 const tagOptions = ['Tenang', 'Penuh', 'Bersih', 'Perahu Pisang', 'Berenang Selancar', 'Snorkeling'];
 
@@ -14,24 +16,157 @@ const Homepage = () => {
   const [isLoadingSearch, setIsLoadingSearch] = useState(false);
   const [recommendations, setRecommendations] = useState([]);
   const [isLoadingRecommend, setIsLoadingRecommend] = useState(false);
-
-  // New state for search mode
-  const [searchMode, setSearchMode] = useState('search'); // 'search' or 'recommend'
-
-  // State and Ref for carousel
+  const [searchMode, setSearchMode] = useState('search');
   const [currentIndex, setCurrentIndex] = useState(0);
   const scrollContainerRef = useRef(null);
-
   const navigate = useNavigate();
   const inputRef = useRef();
   const dropdownRef = useRef();
 
-  // Fungsi untuk mendapatkan token JWT dari localStorage
-  const getAuthToken = () => {
-    return localStorage.getItem('token'); // Sesuaikan dengan kunci penyimpanan token Anda
+  const getAuthToken = () => localStorage.getItem('token');
+
+  // --- REFAKTORISASI: Logika pengambilan data rekomendasi ---
+  const fetchRecommendations = async (preference = "pantai yang indah, sepi, dan bersih") => {
+    setIsLoadingRecommend(true);
+    const token = getAuthToken();
+
+    if (!token) {
+      setIsLoadingRecommend(false);
+      setRecommendations([]);
+      return;
+    }
+
+    try {
+      // 1. Dapatkan daftar ID dan skor rekomendasi
+      const recommendResponse = await axios.post(`${API_BASE_URL}/beach/recommend`, {
+        preference_text: preference,
+        top_n: 8
+      }, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      
+      const recommendationsWithScores = recommendResponse.data.recommendations;
+
+      if (recommendationsWithScores && recommendationsWithScores.length > 0) {
+        const placeIds = recommendationsWithScores.map(rec => rec.placeId);
+        
+        // Buat map untuk menggabungkan skor nanti
+        const scoreMap = new Map(recommendationsWithScores.map(rec => [rec.placeId, rec.score]));
+
+        // 2. Dapatkan detail lengkap untuk semua ID dalam satu panggilan API
+        const detailsResponse = await axios.post(`${API_BASE_URL}/beach/batch-details`, {
+          placeIds: placeIds
+        });
+        
+        const detailedBeaches = detailsResponse.data;
+
+        // 3. Gabungkan detail dengan skor
+        const finalRecommendations = detailedBeaches.map(beach => ({
+          ...beach,
+          score: scoreMap.get(beach.placeId) || 0 // Tambahkan skor kembali
+        }));
+
+        setRecommendations(finalRecommendations);
+      } else {
+        setRecommendations([]);
+      }
+    } catch (error) {
+      console.error('Error fetching recommendations:', error);
+      if (axios.isAxiosError(error) && error.response?.status === 401) {
+        alert('Sesi Anda telah habis. Silakan login kembali.');
+      } else {
+        alert('Gagal memuat rekomendasi pantai.');
+      }
+      setRecommendations([]);
+    } finally {
+      setIsLoadingRecommend(false);
+    }
+  };
+  
+  // --- REFAKTORISASI: Logika pencarian dan rekomendasi dari input user ---
+  const handleSearch = async () => {
+    const trimmed = inputValue.trim();
+    if (!trimmed) return;
+
+    setIsLoadingSearch(true);
+    const token = getAuthToken();
+
+    try {
+      if (searchMode === 'search') {
+        // --- DIPERBAIKI: Menggunakan metode GET untuk pencarian ---
+        const response = await axios.get(`${API_BASE_URL}/beach/search`, {
+          params: {
+            search: trimmed,
+            limit: 10,
+            page: 1,
+          },
+        });
+
+        // CATATAN: Pengiriman 'state' ini tidak persisten. Halaman /search idealnya
+        // harus bisa fetch data sendiri berdasarkan URL query jika state tidak ada.
+        navigate(`/search?search=${encodeURIComponent(trimmed)}`, {
+          state: {
+            results: response.data.data,
+            totalCount: response.data.totalCount,
+            searchMode: 'search',
+          },
+        });
+      } else { // Mode 'recommend'
+        if (!token) {
+          alert('Anda harus login untuk mendapatkan rekomendasi personalisasi.');
+          setIsLoadingSearch(false);
+          return;
+        }
+
+        // 1. Dapatkan daftar ID rekomendasi berdasarkan preferensi
+        const recommendResponse = await axios.post(`${API_BASE_URL}/beach/recommend`, {
+          preference_text: trimmed,
+          top_n: 10
+        }, { headers: { Authorization: `Bearer ${token}` } });
+        
+        const recommendationsWithScores = recommendResponse.data.recommendations;
+
+        if (recommendationsWithScores && recommendationsWithScores.length > 0) {
+          const placeIds = recommendationsWithScores.map(rec => rec.placeId);
+          const scoreMap = new Map(recommendationsWithScores.map(rec => [rec.placeId, rec.score]));
+
+          // 2. Dapatkan detail lengkap dalam satu panggilan
+          const detailsResponse = await axios.post(`${API_BASE_URL}/beach/batch-details`, {
+            placeIds: placeIds
+          });
+
+          const detailedBeaches = detailsResponse.data;
+
+          // 3. Gabungkan detail dan skor
+          const finalResults = detailedBeaches.map(beach => ({
+            ...beach,
+            score: scoreMap.get(beach.placeId) || 0
+          }));
+          
+          navigate(`/search?search=${encodeURIComponent(trimmed)}`, {
+            state: {
+              results: finalResults,
+              totalCount: finalResults.length,
+              searchMode: 'recommend',
+            },
+          });
+        } else {
+          navigate(`/search?search=${encodeURIComponent(trimmed)}`, {
+            state: { results: [], totalCount: 0, searchMode: 'recommend' },
+          });
+        }
+      }
+    } catch (error) {
+      console.error('Error during search/recommendation:', error);
+      alert('Terjadi kesalahan. Silakan coba lagi.');
+      navigate(`/search?search=${encodeURIComponent(trimmed)}`, {
+        state: { results: [], error: error.message, searchMode },
+      });
+    } finally {
+      setIsLoadingSearch(false);
+    }
   };
 
-  // Close dropdown if click outside
   useEffect(() => {
     const handleClickOutside = (event) => {
       if (
@@ -51,69 +186,8 @@ const Homepage = () => {
     };
   }, [dropdownVisible]);
 
-  // Initial fetch for recommendations (e.g., default recommendations)
-  const fetchRecommendations = async (preference = "pantai yang indah, sepi, dan bersih") => {
-    setIsLoadingRecommend(true);
-    const token = getAuthToken(); // Ambil token
-
-    if (!token) {
-      // Jika tidak ada token, tampilkan pesan dan mungkin redirect ke halaman login
-      setIsLoadingRecommend(false);
-      setRecommendations([]); // Kosongkan rekomendasi jika tidak login
-      // Opsional: navigate('/login');
-      return;
-    }
-
-    try {
-      const response = await axios.post('https://recommendation-beach-backend-production.up.railway.app/beach/recommend', {
-        preference_text: preference,
-        top_n: 8
-      }, {
-        headers: {
-          Authorization: `Bearer ${token}`
-        }
-      });
-
-      // Asumsi response.data.recommendations adalah array of { placeId: '...', score: X }
-      const recommendedPlaceIds = response.data.recommendations; 
-
-      if (recommendedPlaceIds && recommendedPlaceIds.length > 0) {
-        const detailedRecommendations = await Promise.all(
-          recommendedPlaceIds.map(async (rec) => {
-            try {
-              const detailResponse = await axios.get(`https://recommendation-beach-backend-production.up.railway.app/beach/${rec.placeId}`, {
-                headers: {
-                  Authorization: `Bearer ${token}`
-                }
-              });
-              // Menggabungkan data detail dari /beach/{placeId} dengan score dari rekomendasi
-              // Kami tetap menyimpan score jika diperlukan di tempat lain, tapi tidak akan menampilkannya di UI untuk "cocok"
-              return { ...detailResponse.data, score: rec.score }; 
-            } catch (detailError) {
-              console.error(`Error fetching detail for placeId ${rec.placeId}:`, detailError);
-              return null;
-            }
-          })
-        );
-        setRecommendations(detailedRecommendations.filter(Boolean));
-      } else {
-        setRecommendations([]);
-      }
-    } catch (error) {
-      console.error('Error fetching recommendations:', error);
-      if (axios.isAxiosError(error) && error.response && error.response.status === 401) {
-        alert('Sesi Anda telah habis atau Anda belum login. Silakan login kembali.');
-      } else {
-        alert('Gagal memuat rekomendasi pantai. Silakan coba lagi nanti.');
-      }
-      setRecommendations([]);
-    } finally {
-      setIsLoadingRecommend(false);
-    }
-  };
-
   useEffect(() => {
-    fetchRecommendations(); // Fetch default recommendations on component mount
+    fetchRecommendations();
   }, []);
 
   const itemsPerView = 4;
@@ -141,113 +215,6 @@ const Homepage = () => {
     scrollToIndex(newIndex);
   };
 
-  const handleSearch = async () => {
-    const trimmed = inputValue.trim();
-    if (!trimmed) return;
-
-    setIsLoadingSearch(true);
-    const token = getAuthToken();
-
-    try {
-      if (searchMode === 'search') {
-        const url = 'https://recommendation-beach-backend-production.up.railway.app/beach/search';
-        const response = await axios.get(url, {
-          params: {
-            search: trimmed,
-            limit: 10,
-            page: 1,
-          },
-        });
-
-        const beachResults = response.data.data;
-        navigate(`/search?search=${encodeURIComponent(trimmed)}`, {
-          state: {
-            results: beachResults,
-            totalCount: response.data.count,
-            currentPage: response.data.page,
-            totalPages: Math.ceil(response.data.count / response.data.limit),
-            hasMore: response.data.count > response.data.limit,
-            searchMode: 'search',
-          },
-        });
-      } else {
-        if (!token) {
-          alert('Anda harus login untuk mendapatkan rekomendasi personalisasi.');
-          setIsLoadingSearch(false);
-          return;
-        }
-
-        const response = await axios.post('https://recommendation-beach-backend-production.up.railway.app/beach/recommend', {
-          preference_text: trimmed,
-          top_n: 10
-        }, {
-          headers: {
-            Authorization: `Bearer ${token}`
-          }
-        });
-
-        const recommendedPlaceIds = response.data.recommendations;
-
-        if (recommendedPlaceIds && recommendedPlaceIds.length > 0) {
-          const detailedRecommendations = await Promise.all(
-            recommendedPlaceIds.map(async (rec) => {
-              try {
-                const detailResponse = await axios.get(`https://recommendation-beach-backend-production.up.railway.app/beach/${rec.placeId}`, {
-                  headers: {
-                    Authorization: `Bearer ${token}`
-                  }
-                });
-                return { ...detailResponse.data, score: rec.score }; // Pertahankan score dari rekomendasi
-              } catch (detailError) {
-                console.error(`Error fetching detail for placeId ${rec.placeId}:`, detailError);
-                return null;
-              }
-            })
-          );
-
-          const validRecommendations = detailedRecommendations.filter(Boolean);
-          navigate(`/search?search=${encodeURIComponent(trimmed)}`, {
-            state: {
-              results: validRecommendations,
-              totalCount: validRecommendations.length,
-              currentPage: 1,
-              totalPages: 1,
-              hasMore: false,
-              searchMode: 'recommend',
-            },
-          });
-        } else {
-          navigate(`/search?search=${encodeURIComponent(trimmed)}`, {
-            state: {
-              results: [],
-              totalCount: 0,
-              currentPage: 1,
-              totalPages: 0,
-              hasMore: false,
-              searchMode: 'recommend',
-            },
-          });
-        }
-      }
-    } catch (error) {
-      console.error('Error during search:', error);
-      let errorMessage;
-      if (axios.isAxiosError(error) && error.response && error.response.status === 401) {
-        errorMessage = 'Sesi Anda telah habis atau Anda belum login. Silakan login kembali.';
-      } else {
-        errorMessage = searchMode === 'search'
-          ? 'Terjadi kesalahan saat mencari pantai. Silakan coba lagi.'
-          : 'Terjadi kesalahan saat mendapatkan rekomendasi. Silakan coba lagi.';
-      }
-      alert(errorMessage);
-      navigate(`/search?search=${encodeURIComponent(trimmed)}`, {
-        state: { results: [], error: error.message, searchMode },
-      });
-    } finally {
-      setIsLoadingSearch(false);
-    }
-  };
-
   const handleNearbySearch = async () => {
     setIsLoadingNearby(true);
     try {
@@ -260,53 +227,32 @@ const Homepage = () => {
         async (position) => {
           const { latitude, longitude } = position.coords;
           try {
-            const response = await axios.get('https://recommendation-beach-backend-production.up.railway.app/beach/nearby', {
+            const response = await axios.get(`${API_BASE_URL}/beach/nearby`, {
               params: { lat: latitude, lng: longitude, radius: 50, limit: 20, page: 1 },
             });
-            const nearbyResults = response.data.data;
             navigate('/search?search=nearby', {
               state: {
-                results: nearbyResults,
+                results: response.data.data,
                 isNearbySearch: true,
                 userLocation: { lat: latitude, lng: longitude },
                 totalCount: response.data.totalCount,
                 currentPage: response.data.currentPage,
                 totalPages: response.data.totalPages,
-                hasMore: response.data.hasMore,
+                hasMore: response.data.totalCount > (response.data.currentPage * response.data.limit),
               },
             });
           } catch (error) {
             console.error('Error fetching nearby beaches:', error);
-            let errorMessage = 'Gagal mengambil data pantai terdekat. ';
-            if (axios.isAxiosError(error) && error.response) {
-              errorMessage += `Error server: ${error.response.status}`;
-            } else if (axios.isAxiosError(error) && error.request) {
-              errorMessage += 'Tidak dapat terhubung ke server.';
-            } else {
-              errorMessage += error.message;
-            }
-            alert(errorMessage + ' Silakan coba lagi.');
+            alert('Gagal mengambil data pantai terdekat. Silakan coba lagi.');
           } finally {
             setIsLoadingNearby(false);
           }
         },
         (error) => {
           console.error('Geolocation error:', error);
-          let errorMessage = 'Tidak dapat mengakses lokasi Anda. ';
-          switch (error.code) {
-            case error.PERMISSION_DENIED:
-              errorMessage += 'Mohon izinkan akses lokasi untuk menemukan pantai terdekat.'; break;
-            case error.POSITION_UNAVAILABLE:
-              errorMessage += 'Informasi lokasi tidak tersedia.'; break;
-            case error.TIMEOUT:
-              errorMessage += 'Permintaan lokasi habis waktu.'; break;
-            default:
-              errorMessage += 'Terjadi kesalahan yang tidak diketahui.'; break;
-          }
-          alert(errorMessage);
+          alert('Tidak dapat mengakses lokasi Anda. Mohon izinkan akses lokasi di browser Anda.');
           setIsLoadingNearby(false);
-        },
-        { enableHighAccuracy: true, timeout: 10000, maximumAge: 300000 }
+        }
       );
     } catch (error) {
       console.error('Error initiating nearby search:', error);
@@ -391,9 +337,7 @@ const Homepage = () => {
               Enjoy the stunning natural beauty, soft white sand, and the calming sound of the waves.
               Dream Beach is the ideal destination to relax, adventure, and create unforgettable
               memories with family or loved ones.
-
             </p>
-
             {/* Search Box with Mode Toggle */}
             <div className="relative w-full max-w-lg mx-auto mt-10">
               {/* Mode Toggle Buttons */}
@@ -484,7 +428,6 @@ const Homepage = () => {
                       </div>
                     </button>
                   </div>
-
                   {/* Popular Tags */}
                   <div>
                     <h3 className="text-sm font-semibold mb-3 text-gray-700">
@@ -521,6 +464,7 @@ const Homepage = () => {
         </div>
       </section>
 
+      {/* Recommendations Section */}
       <section className="py-16 px-4 sm:px-6 md:px-10 bg-transparent">
         <div className="max-w-screen-lg mx-auto">
           <div className="mb-8">
@@ -564,7 +508,6 @@ const Homepage = () => {
               >
                 <ChevronRight className="w-6 h-6 text-gray-600" />
               </button>
-
               {/* Carousel Container */}
               <div
                 ref={scrollContainerRef}
@@ -574,7 +517,7 @@ const Homepage = () => {
                 <div className="flex gap-6 pb-4">
                   {recommendations.map((beach, idx) => (
                     <div
-                      key={beach.place_id}
+                      key={beach.place_id || beach.placeId}
                       className="flex-shrink-0 w-64 bg-white rounded-2xl shadow-lg overflow-hidden flex flex-col group transition-all duration-300"
                       style={{ minWidth: '256px' }}
                     >
@@ -608,14 +551,13 @@ const Homepage = () => {
                           <span className="truncate">{beach.address || 'Lokasi tidak tersedia'}</span>
                         </div>
                       </div>
-                      {/* Tombol Aksi */}
                       <div className="p-4 pt-2 mt-auto border-t border-gray-100 flex items-center gap-2">
                         <button
-                            onClick={() => handleDetailClick(beach.placeId)}
-                            className="flex-1 text-sm bg-sky-500 text-white px-4 py-2 rounded-lg font-semibold hover:bg-sky-600 transition-colors flex items-center justify-center gap-1"
+                          onClick={() => handleDetailClick(beach.placeId)}
+                          className="flex-1 text-sm bg-sky-500 text-white px-4 py-2 rounded-lg font-semibold hover:bg-sky-600 transition-colors flex items-center justify-center gap-1"
                         >
-                            <Info className="w-4 h-4" />
-                            Detail
+                          <Info className="w-4 h-4" />
+                          Detail
                         </button>
                         <a
                           href={beach.link}
@@ -631,30 +573,29 @@ const Homepage = () => {
                   ))}
                 </div>
               </div>
-
               {/* Pagination Dots */}
               {maxIndex > 0 && (
                 <div className="flex justify-center mt-8">
-                    <div className="flex space-x-2">
-                        {Array.from({ length: maxIndex + 1 }).map((_, index) => (
-                            <button
-                                key={index}
-                                onClick={() => {
-                                    setCurrentIndex(index);
-                                    scrollToIndex(index);
-                                }}
-                                className={`w-2 h-2 rounded-full transition-colors duration-200 ${
-                                    index === currentIndex ? 'bg-sky-500' : 'bg-gray-300 hover:bg-gray-400'
-                                }`}
-                            />
-                        ))}
-                    </div>
+                  <div className="flex space-x-2">
+                    {Array.from({ length: maxIndex + 1 }).map((_, index) => (
+                      <button
+                        key={index}
+                        onClick={() => {
+                          setCurrentIndex(index);
+                          scrollToIndex(index);
+                        }}
+                        className={`w-2 h-2 rounded-full transition-colors duration-200 ${
+                          index === currentIndex ? 'bg-sky-500' : 'bg-gray-300 hover:bg-gray-400'
+                        }`}
+                      />
+                    ))}
+                  </div>
                 </div>
               )}
             </div>
           ) : (
             <div className="text-center text-gray-500 py-20">
-              Tidak ada rekomendasi pantai untuk saat ini.
+              {getAuthToken() ? 'Tidak ada rekomendasi pantai untuk saat ini.' : 'Silakan login untuk melihat rekomendasi pantai.'}
             </div>
           )}
         </div>
