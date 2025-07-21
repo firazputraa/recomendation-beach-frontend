@@ -7,7 +7,7 @@ import { MapPin, ChevronLeft, ChevronRight, ExternalLink, Info } from 'lucide-re
 // Definisikan base URL API di satu tempat agar mudah diubah
 const API_BASE_URL = 'https://recommendation-beach-backend-production.up.railway.app';
 
-const tagOptions = ['Tenang', 'Penuh', 'Bersih', 'Banana boat', 'Surfing', 'Snorkeling'];
+const tagOptions = ['Tenang', 'Penuh', 'Bersih', 'Perahu Pisang', 'Berenang Selancar', 'Snorkeling'];
 
 const Homepage = () => {
   const [inputValue, setInputValue] = useState('');
@@ -25,7 +25,7 @@ const Homepage = () => {
 
   const getAuthToken = () => localStorage.getItem('token');
 
-  // --- Logika pengambilan data rekomendasi ---
+  // --- [Disederhanakan] Logika pengambilan data rekomendasi ---
   const fetchRecommendations = async (preference = "pantai yang indah, sepi, dan bersih") => {
     setIsLoadingRecommend(true);
     const token = getAuthToken();
@@ -37,18 +37,17 @@ const Homepage = () => {
     }
 
     try {
-      // 1. Dapatkan daftar ID dan skor rekomendasi (sudah terurut dari backend)
-      const recommendResponse = await axios.post(`${API_BASE_URL}/beach/recommend`, {
+      // Cukup satu panggilan API. Backend sudah mengembalikan data lengkap.
+      const response = await axios.post(`${API_BASE_URL}/beach/recommend`, {
         preference_text: preference,
       }, {
         headers: { Authorization: `Bearer ${token}` }
       });
       
-      const recommendationsFromBE = recommendResponse.data.recommendations;
+      const finalRecommendations = response.data.recommendations;
 
-      // Cek jika backend mengembalikan data yang valid
-      if (recommendationsFromBE && recommendationsFromBE.length > 0) {
-        setRecommendations(recommendationsFromBE.slice(0, 8)); // Ambil 8 teratas seperti sebelumnya
+      if (finalRecommendations && finalRecommendations.length > 0) {
+        setRecommendations(finalRecommendations.slice(0, 8)); // Ambil 8 teratas untuk carousel
       } else {
         setRecommendations([]);
       }
@@ -65,7 +64,7 @@ const Homepage = () => {
     }
   };
   
-  // --- Logika pencarian dan rekomendasi dari input user ---
+  // --- [Disederhanakan] Logika pencarian dan rekomendasi dari input user ---
   const handleSearch = async () => {
     const trimmed = inputValue.trim();
     if (!trimmed) return;
@@ -75,7 +74,7 @@ const Homepage = () => {
 
     try {
       if (searchMode === 'search') {
-        // Metode GET untuk pencarian
+        // Alur ini sudah benar dan tidak berubah.
         const response = await axios.get(`${API_BASE_URL}/beach/search`, {
           params: {
             search: trimmed,
@@ -98,12 +97,12 @@ const Homepage = () => {
           return;
         }
 
-        // Dapatkan rekomendasi yang sudah lengkap dari backend
-        const recommendResponse = await axios.post(`${API_BASE_URL}/beach/recommend`, {
+        // Cukup satu panggilan API. Backend sudah mengembalikan data lengkap.
+        const response = await axios.post(`${API_BASE_URL}/beach/recommend`, {
           preference_text: trimmed,
         }, { headers: { Authorization: `Bearer ${token}` } });
         
-        const finalResults = recommendResponse.data.recommendations;
+        const finalResults = response.data.recommendations;
 
         navigate(`/search?search=${encodeURIComponent(trimmed)}`, {
           state: {
@@ -124,6 +123,7 @@ const Homepage = () => {
     }
   };
 
+  // --- Sisa Kode (Tidak ada perubahan) ---
   useEffect(() => {
     const handleClickOutside = (event) => {
       if (
